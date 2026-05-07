@@ -1,0 +1,43 @@
+$C = "../Common.ui";
+
+@ButtonStateStyle = TextButtonStyleState(
+    LabelStyle: (
+        ...$C.@DefaultButtonLabelStyle,
+        FontSize: 14,
+        FontName: "Secondary",
+    ),
+);
+
+Group{
+    LayoutMode: Top;
+    FlexWeight: 1;
+
+    Label #Label {
+        Style: (TextColor: #ffffff);
+    }
+
+    Label #Owner {
+        Style: (TextColor: #ffffff, FontSize: 12);
+    }
+}
+
+TextButton #Warp {
+     Style: (
+         Default: (
+             ...@ButtonStateStyle,
+             Background: #4577a8,
+         ),
+         Hovered: (
+             ...@ButtonStateStyle,
+             Background: #3361A0,
+         ),
+         Pressed: (
+             ...@ButtonStateStyle,
+             Background: #3074b7,
+         ),
+         Sounds: $C.@ButtonSounds,
+     );
+     Anchor: (Height: 28, Left: 5, Right: 5);
+     Padding: (Horizontal: $C.@DefaultButtonPadding);
+     Text: "GO";
+ }

@@ -1,0 +1,73 @@
+$C = "../Common.ui";
+
+$C.@PageOverlay {
+    LayoutMode: Middle;
+
+    $C.@DecoratedContainer {
+        @CloseButton = true;
+        Anchor: (Width: 600);
+
+        #Title {
+            $C.@Title {
+                @Text = %server.customUI.teleporter.title;
+            }
+        }
+
+        #Content {
+            LayoutMode: Top;
+            Padding: (Full: 16);
+
+            Group {
+                LayoutMode: Left;
+                Anchor: (Bottom: 16);
+                Visible: true;
+
+                Group {
+                    LayoutMode: Top;
+                    Anchor: (Width: 295, Height: 400);
+
+                    Label {
+                        Anchor: (Left: 0, Right: 0, Bottom: 20);
+                        Text: %portals.ui.warp.public;
+                        Style: (...$C.@DefaultLabelStyle, RenderBold: true);
+                    }
+
+                    Group #Public {
+                        LayoutMode: BottomScrolling;
+                        Anchor: (Left: 0, Right: 0, Bottom: 20);
+
+                        Label #NoWarps {
+                            Text: %server.customUI.warpListPage.noWarps;
+                            Style: (TextColor: #bbbbbb);
+                            Visible: false;
+                        }
+                    }
+                }
+
+                Group {
+                    LayoutMode: Top;
+                    Anchor: (Width: 295, Height: 400, Left: 10);
+
+                    Label {
+                        Anchor: (Left: 0, Right: 0, Bottom: 20);
+                        Text: %portals.ui.warp.personal;
+                        Style: (...$C.@DefaultLabelStyle, RenderBold: true);
+                    }
+
+                    Group #Personal {
+                        LayoutMode: BottomScrolling;
+                        Anchor: (Left: 0, Right: 0, Bottom: 20);
+
+                        Label #NoWarps {
+                            Text: %server.customUI.warpListPage.noWarps;
+                            Style: (TextColor: #bbbbbb);
+                            Visible: false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+$C.@BackButton {}

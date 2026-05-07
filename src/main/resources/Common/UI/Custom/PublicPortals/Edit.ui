@@ -1,0 +1,164 @@
+$C = "../Common.ui";
+
+@ToggleButtonStateStyle = TextButtonStyleState(
+    LabelStyle: (
+        ...$C.@DefaultButtonLabelStyle,
+        FontSize: 14,
+    ),
+);
+
+@ToggleButton = TextButton {
+    Style: (
+        Default: (
+            ...@ToggleButtonStateStyle,
+            Background: #4577a8,
+        ),
+        Hovered: (
+            ...@ToggleButtonStateStyle,
+            Background: #3361A0,
+        ),
+        Pressed: (
+            ...@ToggleButtonStateStyle,
+            Background: #3074b7,
+        ),
+        Disabled: (
+            ...@ToggleButtonStateStyle,
+            Background: #434343,
+        ),
+        Sounds: $C.@ButtonSounds,
+    );
+    Anchor: (Width: 150, Height: 28, Left: 5, Right: 5);
+    Padding: (Horizontal: $C.@DefaultButtonPadding);
+    Text: @Text;
+};
+
+@HR = Group {
+    Anchor: (Vertical: 16, Height: 1);
+    Background: #5e512c;
+};
+
+$C.@PageOverlay {
+    LayoutMode: Middle;
+
+    $C.@DecoratedContainer {
+        @CloseButton = true;
+        Anchor: (Width: 532);
+
+        #Title {
+            $C.@Title {
+                @Text = %server.customUI.teleporter.title;
+            }
+        }
+
+        #Content {
+            LayoutMode: Top;
+            Padding: (Full: 16);
+
+            Group {
+                LayoutMode: Top;
+                Anchor: (Bottom: 16);
+                Visible: true;
+
+                Group #Visibility {
+                    LayoutMode: CenterMiddle;
+                    Anchor: (Width: 532);
+
+                    @ToggleButton #Public {
+                        Text: %portals.ui.edit.public;
+                    }
+                    @ToggleButton #Personal {
+                        Text: %portals.ui.edit.personal;
+                    }
+                }
+
+                Group #PersonalAmount {
+                    LayoutMode: Left;
+                    Anchor: (Width: 532, Top: 10);
+                    Padding: (Horizontal: 16);
+
+                    Label {
+                        Style: (...$C.@DefaultLabelStyle, RenderBold: true);
+                        Text: %portals.ui.edit.personalAmount;
+                    }
+
+                    Label #Label {
+                        Style: (...$C.@DefaultLabelStyle, TextColor: #cccccc, RenderBold: true);
+                        Text: "0/2";
+                    }
+                }
+
+                @HR {}
+
+                Group #Destination {
+                    LayoutMode: Top;
+
+                    Label {
+                      Text: %server.customUI.teleporter.targetWarp;
+                      Anchor: (Bottom: 7);
+                      Style: (...$C.@DefaultLabelStyle, RenderBold: true);
+                    }
+
+                    $C.@DropdownBox #Dropdown {
+                      @Anchor = (Left: 5, Bottom: 16);
+                      NoItemsText: %server.customUI.dropdown.noItems;
+                    }
+                }
+
+                @HR {}
+
+                Group #Name{
+                    LayoutMode: Top;
+
+                    Label {
+                      Text: %server.customUI.teleporter.warpName;
+                      Anchor: (Bottom: 7);
+                      Style: (...$C.@DefaultLabelStyle, RenderBold: true);
+                    }
+
+                    $C.@TextField #Input {
+                      @Anchor = (Width: 60, Left: 0, Right: 16);
+                      PlaceholderText: "Name placeholder";
+                    }
+
+                    Label #Error {
+                      Text: "Label error message";
+                      Style: (FontSize: 18, TextColor: #bb3333, RenderBold: true);
+                      Anchor: (Top: 8);
+                    }
+                }
+
+                Group #AllowTeleport {
+                    LayoutMode: Top;
+
+                    @HR {}
+
+                    Group{
+                        LayoutMode: Left;
+
+                        $C.@CheckBox #Checkbox {
+                            Value: true;
+                        }
+
+                        Label {
+                          Text: "Allow other players to teleport there";
+                          Anchor: (Top: 7, Left: 10, Bottom: 7);
+                          Style: (...$C.@DefaultLabelStyle, RenderBold: true);
+                        }
+                    }
+                }
+            }
+
+            @HR {}
+
+            Group #Buttons {
+                LayoutMode: Top;
+
+                $C.@TextButton #SaveButton {
+                    Text: %server.customUI.saveChanges;
+                }
+            }
+        }
+    }
+}
+
+$C.@BackButton {}

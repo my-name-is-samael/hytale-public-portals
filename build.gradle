@@ -1,0 +1,101 @@
+apply plugin: 'idea'
+apply plugin: 'java'
+
+// Read version from manifest.json
+def manifestFile = file('src/main/resources/manifest.json')
+def manifest = new groovy.json.JsonSlurper().parseText(manifestFile.text)
+project.version = manifest.Version
+
+// Server configuration
+ext {
+    serverModsDir = file('D:/HytaleDev/Server/mods')
+    modName = manifest.Name
+}
+
+// Force clean build every time
+tasks.named('clean') {
+    doLast {
+        project.delete(project.buildDir)
+    }
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+}
+
+repositories {
+    mavenCentral()
+    maven {
+        url = uri("${projectDir}/local-repo")
+    }
+}
+
+dependencies {
+    compileOnly 'com.hypixel.hytale:HytaleServer-parent:1.0-SNAPSHOT'
+}
+
+// Force compilation
+tasks.named('compileJava') {
+    dependsOn 'clean'
+    options.encoding = 'UTF-8'
+    options.compilerArgs += ['-Xlint:unchecked', '-Xlint:deprecation']
+}
+
+// Package task to create JAR
+task packageJar(type: Jar) {
+    dependsOn 'clean', 'compileJava', 'processResources', 'classes'
+    archiveBaseName = project.ext.modName
+    archiveVersion = project.version
+
+    onlyIf { true }
+
+    from sourceSets.main.output
+    from('src/main/resources') {
+        into ''
+        duplicatesStrategy = DuplicatesStrategy.INCLUDE
+    }
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+}
+
+// Force JAR recreation every build
+jar {
+    dependsOn 'packageJar'
+    
+    doLast {
+        println "JAR created forcefully: ${archiveFile.get()} (version ${project.version})"
+
+        println "Removing previous server mods..."
+        def modsDir = project.ext.serverModsDir
+        def modPattern = /^${project.ext.modName}-.*\.jar$/
+        
+        if (modsDir.exists() && modsDir.isDirectory()) {
+            def deletedCount = 0
+            try {
+                modsDir.eachFile { file ->
+                    if (file.name ==~ modPattern) {
+                        try {
+                            def deleted = file.delete()
+                            if (deleted) {
+                                deletedCount++
+                            } else {
+                                try {
+                                    file.deleteOnExit()
+                                } catch (Exception e) {
+                                    println "  Could not schedule deletion: ${e.message}"
+                                }
+                            }
+                        } catch (Exception e) {
+                            println "  Error deleting ${file.name}: ${e.message}"
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                println "  Error in file matching: ${e.message}"
+            }
+            println "Cleaned ${deletedCount} previous JAR versions from ${modsDir}"
+        } else {
+            println "Server mods directory not found or not accessible: ${modsDir}"
+        }
+    }
+}
