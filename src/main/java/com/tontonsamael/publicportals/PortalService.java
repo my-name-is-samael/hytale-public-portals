@@ -12,7 +12,6 @@ import com.hypixel.hytale.logger.HytaleLogger;
 import com.hypixel.hytale.math.vector.Transform;
 import com.hypixel.hytale.math.vector.Vector3d;
 import com.hypixel.hytale.math.vector.Vector3f;
-import com.hypixel.hytale.math.vector.Vector3i;
 import com.hypixel.hytale.protocol.BlockPosition;
 import com.hypixel.hytale.protocol.GameMode;
 import com.hypixel.hytale.server.core.Message;
@@ -58,6 +57,8 @@ public class PortalService {
         public int y;
         public int z;
         @Nullable
+        public Float yaw;
+        @Nullable
         public String destination;
         public boolean queueDestinationChange;
 
@@ -68,7 +69,7 @@ public class PortalService {
         public PortalData() {
         }
 
-        public PortalData(String id, String name, @Nullable String owner, @Nullable String ownerName, boolean allowTeleport, String world, int x, int y, int z) {
+        public PortalData(String id, String name, @Nullable String owner, @Nullable String ownerName, boolean allowTeleport, String world, int x, int y, int z, @Nullable Float yaw) {
             this.id = id;
             this.name = name;
             this.owner = owner;
@@ -78,16 +79,17 @@ public class PortalService {
             this.x = x;
             this.y = y;
             this.z = z;
+            this.yaw = yaw;
         }
 
-        public PortalData(String id, String name, @Nullable String owner, @Nullable String ownerName, boolean allowTeleport, String world, int x, int y, int z, @Nullable String destination, boolean queueDestinationChange) {
-            this(id, name, owner, ownerName, allowTeleport, world, x, y, z);
+        public PortalData(String id, String name, @Nullable String owner, @Nullable String ownerName, boolean allowTeleport, String world, int x, int y, int z, @Nullable Float yaw, @Nullable String destination, boolean queueDestinationChange) {
+            this(id, name, owner, ownerName, allowTeleport, world, x, y, z, yaw);
             this.destination = destination;
             this.queueDestinationChange = queueDestinationChange;
         }
 
         public PortalData sanitize() {
-            return new PortalData(id, name, owner, ownerName, allowTeleport, world, x, y, z, destination, queueDestinationChange);
+            return new PortalData(id, name, owner, ownerName, allowTeleport, world, x, y, z, yaw, destination, queueDestinationChange);
         }
     }
 
@@ -204,7 +206,8 @@ public class PortalService {
                 );
                 PortalData portal = new PortalData(newId, finalName,
                         null, null, false, w.getWorld(),
-                        position.x, position.y, position.z);
+                        position.x, position.y, position.z,
+                        w.getTransform().getRotation().y);
                 portals.put(newId, portal);
             });
             config.get().setPortals(portals);
@@ -232,7 +235,8 @@ public class PortalService {
                 if (w == null) return;
                 worlds.put(p.world, w);
             }
-            Transform transform = new Transform(new Vector3i(p.x, p.y, p.z));
+            Transform transform = new Transform(new Vector3d(p.x, p.y, p.z),
+                    new Vector3f(0, p.yaw != null ? p.yaw : 0, 0));
             warps.put(id, new Warp(transform,
                     id, worlds.get(p.world), p.ownerName != null ? p.ownerName : "*Teleporter", Instant.now()));
             insertedIds.add(id);
@@ -269,18 +273,18 @@ public class PortalService {
                     PortalUtils.activatePortal(player.getWorld(), pos);
                     if (p.teleporter == null)
                         p.teleporter = PortalUtils.retrieveTeleporter(player.getWorld(), pos);
-                    if(p.teleporter == null){
+                    if (p.teleporter == null) {
                         // invalid portal
                         deletionQueue.add(p.id);
                         return;
                     }
-                    if(p.queueDestinationChange) {
+                    if (p.queueDestinationChange) {
                         p.teleporter.setWarp(p.destination);
                         p.queueDestinationChange = false;
                         PublicPortals.get().getConfigPortal().get().setPortal(p);
                     }
                 });
-        if(!deletionQueue.isEmpty()) {
+        if (!deletionQueue.isEmpty()) {
             deletionQueue.forEach(this::onBreak);
         }
     }
@@ -342,14 +346,22 @@ public class PortalService {
             return;
         }
 
+        Warp warp = TeleportPlugin.get().getWarps().values().stream()
+                .filter(w -> w.getTransform() != null &&
+                        w.getTransform().getRotation().y > 0f &&
+                        PortalUtils.isPositionSimilar(w.getTransform().getPosition(), position))
+                .findFirst().orElse(null);
+        if (warp == null) return;
+        assert warp.getTransform() != null;
+
         Config<PortalConfig> config = PublicPortals.get().getConfigPortal();
         // public if creative or op and personal limit reached
         boolean isPublic = player.getGameMode() == GameMode.Creative || (PortalUtils.checkOP(player) && isPersonalCapReached(player));
 
         String newPortalId = PortalUtils.generateNewPortalId(portals.keySet());
         PortalData portal = new PortalData(newPortalId, "", isPublic ? null : uuid,
-                isPublic ? null : player.getDisplayName(), false,
-                world.getName(), position.x, position.y, position.z);
+                isPublic ? null : player.getDisplayName(), false, world.getName(),
+                position.x, position.y, position.z, warp.getTransform().getRotation().y);
         portals.put(portal.id, portal);
 
         config.get().setPortal(portal);
@@ -361,7 +373,8 @@ public class PortalService {
     @Nullable
     public CustomUIPage onPlayerUse(Player player, World world, BlockPosition position) {
         if (player.getReference() == null) return null;
-        PlayerRef playerRef = player.getReference().getStore().getComponent(player.getReference(), PlayerRef.getComponentType());
+        PlayerRef playerRef = player.getReference().getStore()
+                .getComponent(player.getReference(), PlayerRef.getComponentType());
         if (playerRef == null) return null;
         String uuid = PortalUtils.getPlayerUUID(player);
         if (uuid == null) return null;
@@ -369,11 +382,14 @@ public class PortalService {
         PortalData portal = getByWorldAndPositionOrClose(world, position);
         if (portal == null) {
             // lonely out-of-sync portal
-            portal = new PortalData(PortalUtils.generateNewPortalId(portals.keySet()), "", null, null, false, world.getName(), position.x, position.y, position.z);
+            portal = new PortalData(PortalUtils.generateNewPortalId(portals.keySet()), "",
+                    null, null, false, world.getName(),
+                    position.x, position.y, position.z, null);
             portals.put(portal.id, portal);
             PublicPortals.get().getConfigPortal().get().setPortal(portal);
             updateWarps();
         }
+        checkPortalYaw(player, portal);
 
         boolean isPublic = portal.owner == null;
 
@@ -400,21 +416,23 @@ public class PortalService {
     public void onPlayerEnter(Player player, World world, BlockPosition position) {
         if (playersWarpSkipDelay.containsKey(player.getDisplayName())) return;
         if (player.getReference() == null) return;
-        PlayerRef playerRef = player.getReference().getStore().getComponent(player.getReference(), PlayerRef.getComponentType());
+        PlayerRef playerRef = player.getReference().getStore()
+                .getComponent(player.getReference(), PlayerRef.getComponentType());
         if (playerRef == null) return;
         PortalData portal = getByWorldAndPositionOrClose(world, position);
         if (portal == null) return;
-        if(portal.destination == null || !portals.containsKey(portal.destination))
-            player.getPageManager().openCustomPage(player.getReference(), player.getReference().getStore(), new PortalSelectDestination(playerRef, portal.id));
-        else
-            world.execute(() -> teleportPlayer(playerRef, portal.destination));
+        if (portal.destination == null || !portals.containsKey(portal.destination))
+            player.getPageManager().openCustomPage(player.getReference(),
+                    player.getReference().getStore(),
+                    new PortalSelectDestination(playerRef, portal.id));
+        else world.execute(() -> teleportPlayer(playerRef, portal.destination, portal.id));
     }
 
     public void onMobEnter(Ref<EntityStore> entity, World world, BlockPosition position) {
         PortalData portal = getByWorldAndPositionOrClose(world, position);
         if (portal == null) return;
-        if(portal.destination != null && portals.containsKey(portal.destination))
-            world.execute(() -> teleportEntity(entity, portal.destination));
+        if (portal.destination != null && portals.containsKey(portal.destination))
+            world.execute(() -> teleportEntity(entity, portal.destination, portal.id));
     }
 
     public boolean onPlayerBreak(Player player, World world, BlockPosition position) {
@@ -450,7 +468,7 @@ public class PortalService {
     private void onBreak(String portalId) {
         portals.values().forEach(p -> {
             // remove destinations
-            if(portalId.equals(p.destination)) {
+            if (portalId.equals(p.destination)) {
                 p.destination = null;
                 p.queueDestinationChange = true;
             }
@@ -522,7 +540,7 @@ public class PortalService {
             return;
         }
 
-        if((portal.destination == null && view.destination != null) ||
+        if ((portal.destination == null && view.destination != null) ||
                 (portal.destination != null && view.destination == null) ||
                 (portal.destination != null && !portal.destination.equals(view.destination)))
             portal.queueDestinationChange = true;
@@ -530,7 +548,7 @@ public class PortalService {
         portal.name = view.name;
         portal.owner = isPublic ? null : uuid;
         portal.ownerName = isPublic ? null : player.getDisplayName();
-        if(!isPublic && !view.allowTeleport) {
+        if (!isPublic && !view.allowTeleport) {
             // remove this newly restricted from destinations
             portals.values().stream()
                     .filter(p -> !p.id.equals(view.id) && view.id.equals(p.destination))
@@ -545,8 +563,16 @@ public class PortalService {
         updateWarps();
     }
 
-    public void teleportPlayer(PlayerRef playerRef, String portalId) {
-        if(!portals.containsKey(portalId)){
+    private void checkPortalYaw(Player player, PortalData portal) {
+        if (portal.yaw == null) {
+            String uuid = PortalUtils.getPlayerUUID(player);
+            if (portal.owner == null ? PortalUtils.checkOP(player) : portal.owner.equals(uuid))
+                player.sendMessage(Message.translation("portals.chat.yawNotSet").color(Color.orange));
+        }
+    }
+
+    public void teleportPlayer(PlayerRef playerRef, String portalId, @Nullable String originPortalId) {
+        if (!portals.containsKey(portalId)) {
             LOGGER.atSevere().log("(teleportPlayer) Invalid portal target '%s'", portalId);
             playerRef.sendMessage(Message.translation("server.commands.teleport.warp.unknownWarp")
                     .param("name", portalId)
@@ -559,14 +585,15 @@ public class PortalService {
         assert ref != null && player != null;
         setWarpSkip(player, 2);
 
-        teleportEntity(ref, portalId);
+        teleportEntity(ref, portalId, originPortalId);
 
         PortalData portal = portals.get(portalId);
         player.sendMessage(Message.translation("server.commands.teleport.warp.warpedTo")
                 .param("name", portal.name.isEmpty() ? portal.id : portal.name));
+        checkPortalYaw(player, portal);
     }
 
-    public void teleportEntity(Ref<EntityStore> ref, String portalId) {
+    public void teleportEntity(Ref<EntityStore> ref, String portalId, @Nullable String originPortalId) {
         PortalData portal = portals.get(portalId);
         if (portal == null) {
             LOGGER.atSevere().log("(teleportMob) Invalid portal target '%s'", portalId);
@@ -575,17 +602,31 @@ public class PortalService {
 
         World world = Universe.get().getWorld(portal.world);
         if (world == null) return;
-        Teleport teleporter = Teleport.createForPlayer(new Transform(
-                new Vector3d(portal.x + .5f, portal.y + .5f, portal.z + .5f)));
+        Teleport teleportCmp = Teleport.createForPlayer(new Transform(
+                PortalUtils.getFinalTeleporterDestination(
+                        new BlockPosition(portal.x, portal.y, portal.z),
+                        portal.yaw)));
 
         TransformComponent transformComponent = ref.getStore().getComponent(ref, TransformComponent.getComponentType());
         HeadRotation headRotationComponent = ref.getStore().getComponent(ref, HeadRotation.getComponentType());
         if (transformComponent == null || headRotationComponent == null) return;
 
-        Vector3d playerPosition = transformComponent.getPosition();
-        Vector3f playerHeadRotation = headRotationComponent.getRotation();
-        ref.getStore().ensureAndGetComponent(ref, TeleportHistory.getComponentType()).append(world, playerPosition.clone(), playerHeadRotation.clone(), "Warp '" + portalId + "'");
-        ref.getStore().addComponent(ref, Teleport.getComponentType(), teleporter);
+        PortalData originPortal = portals.get(originPortalId);
+        if (originPortal != null && originPortal.yaw != null && portal.yaw != null) {
+            // rotate entity to match portals orientations + turn around
+            teleportCmp.setHeadRotation(new Vector3f(
+                    headRotationComponent.getRotation().x,
+                    headRotationComponent.getRotation().y +
+                            (portal.yaw - originPortal.yaw) + (float) Math.PI,
+                    headRotationComponent.getRotation().z));
+        }
+
+        Vector3d entityPosition = transformComponent.getPosition();
+        Vector3f entityHeadRotation = headRotationComponent.getRotation();
+        ref.getStore().ensureAndGetComponent(ref, TeleportHistory.getComponentType())
+                .append(world, entityPosition.clone(), entityHeadRotation.clone(),
+                        "Warp '" + portalId + "'");
+        ref.getStore().addComponent(ref, Teleport.getComponentType(), teleportCmp);
     }
 
     private List<PortalData> getSortedPortals(Player player, List<PortalData> list) {
@@ -626,8 +667,8 @@ public class PortalService {
 
     public List<PortalUtils.KeyValueData<String, DropdownEntryInfo>> getDestinationsList(Player player) {
         List<PortalUtils.KeyValueData<String, DropdownEntryInfo>> res = List.of(
-                new PortalUtils.KeyValueData<>("", new DropdownEntryInfo(LocalizableString.fromMessageId("server.customUI.teleporter.noWarp"), "")
-        ));
+                new PortalUtils.KeyValueData<>("", new DropdownEntryInfo(
+                        LocalizableString.fromMessageId("server.customUI.teleporter.noWarp"), "")));
         String uuid = PortalUtils.getPlayerUUID(player);
         if (uuid == null) return res;
 
@@ -635,17 +676,19 @@ public class PortalService {
         if (view == null) return res;
 
         return Stream.of(res, getSortedPortals(player, portals.values().stream().toList())
-                .stream().filter(p -> {
-                    // current portal
-                    if (p.id.equalsIgnoreCase(view.id)) return false;
-                    // target is private & restricted
-                    if(p.owner != null && !p.allowTeleport) {
-                        // current is public or target belongs to someone else
-                        if (view.ownerName == null || !uuid.equals(p.owner)) return false;
-                    }
-                    return true;
-                }).map(p -> new PortalUtils.KeyValueData<>(p.id, new DropdownEntryInfo(LocalizableString.fromString(
-                        PortalUtils.capitalize(p.name.isEmpty() ? p.id : p.name)
-                ), p.id))).toList()).flatMap(List::stream).toList();
+                        .stream().filter(p -> {
+                            // current portal
+                            if (p.id.equalsIgnoreCase(view.id)) return false;
+                            // target is private & restricted
+                            if (p.owner != null && !p.allowTeleport) {
+                                // current is public or target belongs to someone else
+                                if (view.ownerName == null || !uuid.equals(p.owner)) return false;
+                            }
+                            return true;
+                        }).map(p -> new PortalUtils.KeyValueData<>(p.id, new DropdownEntryInfo(
+                                LocalizableString.fromString(PortalUtils.capitalize(
+                                        p.name.isEmpty() ? p.id : p.name
+                                )), p.id))).toList())
+                .flatMap(List::stream).toList();
     }
 }

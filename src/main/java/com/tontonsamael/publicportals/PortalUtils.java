@@ -5,6 +5,7 @@ import com.hypixel.hytale.component.Ref;
 import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.logger.HytaleLogger;
 import com.hypixel.hytale.math.util.ChunkUtil;
+import com.hypixel.hytale.math.vector.Vector3d;
 import com.hypixel.hytale.math.vector.Vector3i;
 import com.hypixel.hytale.protocol.BlockPosition;
 import com.hypixel.hytale.protocol.packets.interface_.Page;
@@ -43,21 +44,14 @@ public final class PortalUtils {
 
     @Nullable
     public static Teleporter retrieveTeleporter(@Nullable World world, BlockPosition position) {
-        HytaleLogger.Api logger = HytaleLogger.forEnclosingClass().atInfo();
         if (world == null) return null;
         ChunkStore chunkStore = world.getChunkStore();
         long chunkIndex = ChunkUtil.indexChunkFromBlock(position.x, position.z);
         BlockComponentChunk blockComponentChunk = chunkStore.getChunkComponent(chunkIndex, BlockComponentChunk.getComponentType());
-        if (blockComponentChunk == null) {
-            logger.log("chunk is null");
-            return null;
-        }
+        if (blockComponentChunk == null) return null;
         int blockIndex = ChunkUtil.indexBlockInColumn(position.x, position.y, position.z);
         Ref<ChunkStore> blockRef = blockComponentChunk.getEntityReference(blockIndex);
-        if (blockRef == null || !blockRef.isValid()) {
-            logger.log("ref is null");
-            return null;
-        }
+        if (blockRef == null || !blockRef.isValid()) return null;
 
         return chunkStore.getStore().getComponent(blockRef, Teleporter.getComponentType());
     }
@@ -156,7 +150,7 @@ public final class PortalUtils {
         return components;
     }
 
-    public static class KeyValueData<T,U> {
+    public static class KeyValueData<T, U> {
         public T key;
         public U value;
 
@@ -164,5 +158,32 @@ public final class PortalUtils {
             this.key = key;
             this.value = value;
         }
+    }
+
+    public static boolean isPositionSimilar(BlockPosition bpos, Vector3d vpos) {
+        return (bpos.x == vpos.x && bpos.y == vpos.y && bpos.z == vpos.z) || distance3d(bpos.x, bpos.y, bpos.z, vpos.x, vpos.y, vpos.z) < 1f;
+    }
+
+    public static boolean isPositionSimilar(Vector3d vpos, BlockPosition bpos) {
+        return isPositionSimilar(bpos, vpos);
+    }
+
+    public static boolean approximate(double a, double b) {
+        return Math.abs(a - b) < 0.0001;
+    }
+
+    public static Vector3d getFinalTeleporterDestination(BlockPosition basePosition, @Nullable Float yaw) {
+        Vector3d off = new Vector3d();
+        if (yaw != null) {
+            if (approximate(Math.PI, yaw)) // FACING SOUTH
+                off.z = 1;
+            else if (approximate(Math.PI * 3 / 2, yaw)) //  FACING EAST
+                off.x = 1;
+            else if (approximate(Math.PI * 2, yaw)) // FACING NORTH
+                off.z = -1;
+            else if (approximate(Math.PI * 5 / 2, yaw)) // FACING WEST
+                off.x = -1;
+        }
+        return new Vector3d(basePosition.x + off.x + .5f, basePosition.y, basePosition.z + off.z + .5f);
     }
 }

@@ -131,7 +131,7 @@ public class PortalSelectDestination extends InteractiveCustomUIPage<PortalSelec
         switch (action) {
             case Actions.CLOSE -> PortalUtils.closePage(ref, store);
             case Actions.TELEPORT -> {
-                PortalService.get().teleportPlayer(this.playerRef, data.valueString);
+                PortalService.get().teleportPlayer(this.playerRef, data.valueString, currentPortalId);
                 PortalUtils.closePage(ref, store);
             }
         }

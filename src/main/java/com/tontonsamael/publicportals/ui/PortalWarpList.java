@@ -123,7 +123,7 @@ public class PortalWarpList extends InteractiveCustomUIPage<PortalWarpList.UIDat
         switch (action) {
             case Actions.CLOSE -> PortalUtils.closePage(ref, store);
             case Actions.TELEPORT -> {
-                PortalService.get().teleportPlayer(this.playerRef, data.valueString);
+                PortalService.get().teleportPlayer(this.playerRef, data.valueString, null);
                 PortalUtils.closePage(ref, store);
             }
         }

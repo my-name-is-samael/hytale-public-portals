@@ -44,9 +44,6 @@ public class PublicPortals extends JavaPlugin {
         this.getCodecRegistry(Interaction.CODEC).register("PlacementCountCondition", PortalRemoveLimit.class, PortalRemoveLimit.CODEC);
         this.getCodecRegistry(OpenCustomUIInteraction.PAGE_CODEC).register("Teleporter", PortalUseEvent.class, PortalUseEvent.CODEC);
 
-        // TODO check RefSystem<ChunkEntity> on Teleporter to check for self activation
-        // with PortalUtils.blockRefToPosition
-
         LOGGER.atInfo().log("PublicPortals is loaded !");
     }
 

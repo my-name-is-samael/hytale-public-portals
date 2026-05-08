@@ -49,6 +49,10 @@ public class PortalConfig {
                             (p, z) -> p.z = z,
                             (p) -> p.z)
                     .add()
+                    .append(new KeyedCodec<>("Yaw", Codec.FLOAT),
+                            (p, yaw) -> p.yaw = yaw,
+                            (p) -> p.yaw)
+                    .add()
                     .append(new KeyedCodec<>("Destination", Codec.STRING),
                             (p, destination) -> p.destination = destination,
                             (p) -> p.destination)
