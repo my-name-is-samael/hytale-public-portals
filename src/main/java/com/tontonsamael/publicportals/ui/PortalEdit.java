@@ -118,8 +118,8 @@ public class PortalEdit extends InteractiveCustomUIPage<PortalEdit.UIData> {
 
         List<PortalUtils.KeyValueData<String, DropdownEntryInfo>> destinations = PortalService.get().getDestinationsList(player);
         cmd.set("#Destination #Dropdown.Entries", destinations.stream().map(kv -> kv.value).toList());
-        String finalDestination = destinations.stream().anyMatch(kv -> kv.key.equals(view.destination)) ?
-                view.destination : "";
+        String finalDestination = destinations.stream().anyMatch(kv -> kv.key
+                .equals(view.destination)) ? view.destination : "";
         cmd.set("#Destination #Dropdown.Value", finalDestination);
 
         cmd.set("#Name #Input.PlaceholderText", Message.translation(PortalUtils.capitalize(view.id)));

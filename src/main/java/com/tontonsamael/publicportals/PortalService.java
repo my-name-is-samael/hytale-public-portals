@@ -391,6 +391,8 @@ public class PortalService {
         }
         checkPortalYaw(player, portal);
 
+        world.execute(() -> PortalUtils.activatePortal(world, position));
+
         boolean isPublic = portal.owner == null;
 
         // public portal edit check
@@ -481,12 +483,9 @@ public class PortalService {
     public void activateAllPortals() {
         Map<String, World> worlds = new HashMap<>();
         portals.forEach((_, p) -> {
-            World world = worlds.computeIfAbsent(p.world,
-                    _ -> Universe.get().getWorld(p.world));
+            World world = worlds.computeIfAbsent(p.world, _ -> Universe.get().getWorld(p.world));
             if (world != null && world.isAlive())
-                world.execute(() -> PortalUtils.activatePortal(world,
-                        new BlockPosition(p.x, p.y, p.z)));
-
+                world.execute(() -> PortalUtils.activatePortal(world, new BlockPosition(p.x, p.y, p.z)));
         });
     }
 
@@ -552,6 +551,7 @@ public class PortalService {
             // remove this newly restricted from destinations
             portals.values().stream()
                     .filter(p -> !p.id.equals(view.id) && view.id.equals(p.destination))
+                    .filter(p -> p.owner == null || !p.owner.equals(uuid))
                     .forEach(p -> {
                         p.destination = null;
                         p.queueDestinationChange = true;
@@ -588,6 +588,8 @@ public class PortalService {
         teleportEntity(ref, portalId, originPortalId);
 
         PortalData portal = portals.get(portalId);
+        assert player.getWorld() != null;
+        PortalUtils.activatePortal(player.getWorld(), new BlockPosition(portal.x, portal.y, portal.z));
         player.sendMessage(Message.translation("server.commands.teleport.warp.warpedTo")
                 .param("name", portal.name.isEmpty() ? portal.id : portal.name));
         checkPortalYaw(player, portal);
