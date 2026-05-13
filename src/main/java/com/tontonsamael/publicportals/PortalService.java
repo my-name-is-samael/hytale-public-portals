@@ -543,10 +543,7 @@ public class PortalService {
                 (portal.destination != null && view.destination == null) ||
                 (portal.destination != null && !portal.destination.equals(view.destination)))
             portal.queueDestinationChange = true;
-        portal.destination = view.destination;
-        portal.name = view.name;
-        portal.owner = isPublic ? null : uuid;
-        portal.ownerName = isPublic ? null : player.getDisplayName();
+
         if (!isPublic && !view.allowTeleport) {
             // remove this newly restricted from destinations
             portals.values().stream()
@@ -557,7 +554,21 @@ public class PortalService {
                         p.queueDestinationChange = true;
                     });
         }
+
+        portal.name = view.name;
+        portal.owner = isPublic ? null : uuid;
+        portal.ownerName = isPublic ? null : player.getDisplayName();
         portal.allowTeleport = !isPublic && view.allowTeleport;
+
+        portal.destination = view.destination;
+        if (isPublic && portal.destination != null) {
+            // remove destination if it's personal and restricted
+            PortalData destination = portals.get(portal.destination);
+            if (destination == null ||
+                    (destination.owner != null && !destination.allowTeleport))
+                portal.destination = null;
+        }
+
         PublicPortals.get().getConfigPortal().get().setPortal(portal);
         playersEditPortal.remove(player.getDisplayName());
         updateWarps();
@@ -687,10 +698,10 @@ public class PortalService {
                                 if (view.ownerName == null || !uuid.equals(p.owner)) return false;
                             }
                             return true;
-                        }).map(p -> new PortalUtils.KeyValueData<>(p.id, new DropdownEntryInfo(
-                                LocalizableString.fromString(PortalUtils.capitalize(
-                                        p.name.isEmpty() ? p.id : p.name
-                                )), p.id))).toList())
+                        }).map(p -> {
+                            String ownerSuffix = p.ownerName == null ? "" : String.format(" (%s)", p.ownerName);
+                            return new PortalUtils.KeyValueData<>(p.id, new DropdownEntryInfo(LocalizableString.fromString((p.name.isEmpty() ? p.id : p.name) + ownerSuffix), p.id));
+                        }).toList())
                 .flatMap(List::stream).toList();
     }
 }
