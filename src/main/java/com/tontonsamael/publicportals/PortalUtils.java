@@ -5,10 +5,9 @@ import com.hypixel.hytale.component.Ref;
 import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.logger.HytaleLogger;
 import com.hypixel.hytale.math.util.ChunkUtil;
-import com.hypixel.hytale.math.vector.Vector3d;
-import com.hypixel.hytale.math.vector.Vector3i;
 import com.hypixel.hytale.protocol.BlockPosition;
 import com.hypixel.hytale.protocol.packets.interface_.Page;
+import com.hypixel.hytale.server.core.Message;
 import com.hypixel.hytale.server.core.asset.type.blocktype.config.BlockType;
 import com.hypixel.hytale.server.core.entity.UUIDComponent;
 import com.hypixel.hytale.server.core.entity.entities.Player;
@@ -21,6 +20,8 @@ import com.hypixel.hytale.server.core.universe.world.chunk.BlockComponentChunk;
 import com.hypixel.hytale.server.core.universe.world.chunk.WorldChunk;
 import com.hypixel.hytale.server.core.universe.world.storage.ChunkStore;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
+import org.joml.Vector3d;
+import org.joml.Vector3i;
 
 import javax.annotation.Nullable;
 import java.util.HashSet;
@@ -39,7 +40,7 @@ public final class PortalUtils {
         PlayerRef playerRef = ref.getStore().getComponent(ref, PlayerRef.getComponentType());
         if (playerRef == null) return false;
 
-        return PermissionsModule.get().getGroupsForUser(playerRef.getUuid()).contains("OP");
+        return PermissionsModule.get().getGroupsForUser(playerRef.getUuid()).contains("hytale:Admin");
     }
 
     @Nullable
@@ -185,5 +186,27 @@ public final class PortalUtils {
                 off.x = -1;
         }
         return new Vector3d(basePosition.x + off.x + .5f, basePosition.y, basePosition.z + off.z + .5f);
+    }
+
+    public static String getPlayerName(Player player) {
+        String name = player.getLegacyDisplayName();
+        if (name == null || name.isEmpty()) {
+            name = "INVALID";
+            Ref<EntityStore> ref = player.getReference();
+            if (ref == null) return name;
+            PlayerRef pref = ref.getStore().getComponent(ref, PlayerRef.getComponentType());
+            if (pref == null) return name;
+            name = pref.getUsername();
+            if (name.isEmpty()) return "INVALID";
+        }
+        return name;
+    }
+
+    public static void sendMessage(Player player, Message msg) {
+        Ref<EntityStore> ref = player.getReference();
+        if (ref == null) return;
+        PlayerRef pref = ref.getStore().getComponent(ref, PlayerRef.getComponentType());
+        if (pref == null) return;
+        pref.sendMessage(msg);
     }
 }

@@ -178,7 +178,7 @@ public class PortalEdit extends InteractiveCustomUIPage<PortalEdit.UIData> {
                 updated = true;
             }
             case Actions.UPDATE_PERSONAL -> {
-                view.ownerName = player.getDisplayName();
+                view.ownerName = PortalUtils.getPlayerName(player);
                 updated = true;
             }
             case Actions.UPDATE_DESTINATION -> view.destination = data.valueString.isEmpty() ?

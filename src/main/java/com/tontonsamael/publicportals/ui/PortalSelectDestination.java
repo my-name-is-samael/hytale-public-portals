@@ -82,7 +82,7 @@ public class PortalSelectDestination extends InteractiveCustomUIPage<PortalSelec
             cmd.set(String.format("#%s #Label.Text", portal.id), portalLabel);
             if(portal.ownerName == null)
                 cmd.set(String.format("#%s #Owner.Visible", portal.id), false);
-            else if (player.getDisplayName().equals(portal.ownerName)) {
+            else if (PortalUtils.getPlayerName(player).equals(portal.ownerName)) {
                 cmd.set(String.format("#%s #Owner.Visible", portal.id), false);
                 cmd.set(String.format("#%s #Label.Style.TextColor", portal.id),
                         portal.allowTeleport ? "#7cba14" : "#e6e64b");
