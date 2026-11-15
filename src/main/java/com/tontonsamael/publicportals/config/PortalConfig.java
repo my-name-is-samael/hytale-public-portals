@@ -63,7 +63,7 @@ public class PortalConfig {
                     .add()
                     .build();
     private static final MapCodec<PortalService.PortalData, Map<String, PortalService.PortalData>> PORTALS_CODEC =
-            new MapCodec<>(PORTAL_CODEC, HashMap::new, false);
+            new MapCodec<>(PORTAL_CODEC, java.util.concurrent.ConcurrentHashMap::new, false);
     ;
     public static final BuilderCodec<PortalConfig> CODEC =
             BuilderCodec.builder(PortalConfig.class, PortalConfig::new)
@@ -98,7 +98,7 @@ public class PortalConfig {
     }
 
     public void setPortals(Map<String, PortalService.PortalData> newPortals) {
-        portals = new HashMap<>();
+        portals = new java.util.concurrent.ConcurrentHashMap<>();
         newPortals.forEach((id, p) -> portals.put(id, p.sanitize()));
         save();
     }

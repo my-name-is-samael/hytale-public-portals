@@ -4,7 +4,7 @@ import com.hypixel.hytale.builtin.adventure.teleporter.component.Teleporter;
 import com.hypixel.hytale.component.Ref;
 import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.logger.HytaleLogger;
-import com.hypixel.hytale.math.util.ChunkUtil;
+
 import com.hypixel.hytale.protocol.BlockPosition;
 import com.hypixel.hytale.protocol.packets.interface_.Page;
 import com.hypixel.hytale.server.core.Message;
@@ -16,12 +16,12 @@ import com.hypixel.hytale.server.core.permissions.PermissionsModule;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.WorldProvider;
-import com.hypixel.hytale.server.core.universe.world.chunk.BlockComponentChunk;
-import com.hypixel.hytale.server.core.universe.world.chunk.WorldChunk;
+import com.hypixel.hytale.server.core.universe.world.chunk.BlockOperations;
+import com.hypixel.hytale.server.core.universe.world.chunk.section.BlockSection;
 import com.hypixel.hytale.server.core.universe.world.storage.ChunkStore;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import org.joml.Vector3d;
-import org.joml.Vector3i;
+
 
 import javax.annotation.Nullable;
 import java.util.HashSet;
@@ -46,37 +46,73 @@ public final class PortalUtils {
     @Nullable
     public static Teleporter retrieveTeleporter(@Nullable World world, BlockPosition position) {
         if (world == null) return null;
-        ChunkStore chunkStore = world.getChunkStore();
-        long chunkIndex = ChunkUtil.indexChunkFromBlock(position.x, position.z);
-        BlockComponentChunk blockComponentChunk = chunkStore.getChunkComponent(chunkIndex, BlockComponentChunk.getComponentType());
-        if (blockComponentChunk == null) return null;
-        int blockIndex = ChunkUtil.indexBlockInColumn(position.x, position.y, position.z);
-        Ref<ChunkStore> blockRef = blockComponentChunk.getEntityReference(blockIndex);
+        Ref<ChunkStore> blockRef = BlockModule.getBlockEntity(world, position.x, position.y, position.z);
         if (blockRef == null || !blockRef.isValid()) return null;
 
-        return chunkStore.getStore().getComponent(blockRef, Teleporter.getComponentType());
+        return world.getChunkStore().getStore().getComponent(blockRef, Teleporter.getComponentType());
+    }
+
+    /**
+     * True only when the chunk is loaded AND the block there is certainly not a teleporter any more.
+     * Right after a boot the chunk or its block entities may not be ready: that is not a broken portal.
+     */
+    public static boolean isTeleporterBlockGone(World world, BlockPosition pos) {
+        ChunkStore chunkStore = world.getChunkStore();
+        Ref<ChunkStore> sectionRef = chunkStore.getChunkSectionReferenceAtBlock(pos.x, pos.y, pos.z);
+        if (sectionRef == null || !sectionRef.isValid()) return false;
+        BlockSection section = chunkStore.getStore().getComponent(sectionRef, BlockSection.getComponentType());
+        if (section == null) return false;
+        BlockType blockType = BlockType.getAssetMap().getAsset(section.get(pos.x, pos.y, pos.z));
+        if (blockType == null) return false;
+        return !blockType.getId().toLowerCase().contains("teleporter");
+    }
+
+    private static final java.util.Map<String, Long> DEBUG_LAST = new java.util.HashMap<>();
+
+    /** Temporary diagnostic, at most once every 15 s per message and position. */
+    static void debug(BlockPosition pos, String msg) {
+        String key = pos.x + "," + pos.y + "," + pos.z + msg;
+        long now = System.currentTimeMillis();
+        Long last = DEBUG_LAST.get(key);
+        if (last != null && now - last < 15000) return;
+        DEBUG_LAST.put(key, now);
+        HytaleLogger.forEnclosingClass().atInfo().log("[activate %d %d %d] %s", pos.x, pos.y, pos.z, msg);
     }
 
     public static void activatePortal(World world, BlockPosition pos) {
         ChunkStore chunkStore = world.getChunkStore();
-        long chunkIndex = ChunkUtil.indexChunkFromBlock(pos.x, pos.z);
-        BlockComponentChunk blockComponentChunk = chunkStore.getChunkComponent(chunkIndex, BlockComponentChunk.getComponentType());
-        if (blockComponentChunk == null) return;
-        int blockIndex = ChunkUtil.indexBlockInColumn(pos.x, pos.y, pos.z);
-        Ref<ChunkStore> blockRef = blockComponentChunk.getEntityReference(blockIndex);
-        if (blockRef == null || !blockRef.isValid()) return;
+        Ref<ChunkStore> sectionRef = chunkStore.getChunkSectionReferenceAtBlock(pos.x, pos.y, pos.z);
+        if (sectionRef == null || !sectionRef.isValid()) {
+            debug(pos, "no chunk section here (chunk not loaded?)");
+            return;
+        }
+        Ref<ChunkStore> blockRef = BlockModule.getBlockEntity(chunkStore.getStore(), sectionRef, pos.x, pos.y, pos.z);
+        if (blockRef == null || !blockRef.isValid()) {
+            debug(pos, "no block entity at this position");
+            return;
+        }
+        if (chunkStore.getStore().getComponent(blockRef, Teleporter.getComponentType()) == null) {
+            debug(pos, "block entity has no Teleporter component");
+            return;
+        }
 
-        Teleporter portal = blockRef.getStore().getComponent(blockRef, Teleporter.getComponentType());
-        if (portal == null) return;
-        BlockModule.BlockStateInfo blockState = blockRef.getStore().getComponent(blockRef, BlockModule.BlockStateInfo.getComponentType());
-        if (blockState == null) return;
-        WorldChunk worldChunkComponent = chunkStore.getChunkComponent(chunkIndex, WorldChunk.getComponentType());
-        if (worldChunkComponent == null) return;
-        BlockType blockType = worldChunkComponent.getBlockType(new Vector3i(pos.x, pos.y, pos.z));
-        if (blockType == null) return;
-        if (!"Active".equals(blockType.getStateForBlock(blockType))) {
-            worldChunkComponent.setBlockInteractionState(pos.x, pos.y, pos.z, blockType, "Active", false);
-            blockState.markNeedsSaving(blockRef.getStore());
+        BlockSection section = chunkStore.getStore().getComponent(sectionRef, BlockSection.getComponentType());
+        if (section == null) {
+            debug(pos, "no BlockSection");
+            return;
+        }
+        BlockType blockType = BlockType.getAssetMap().getAsset(section.get(pos.x, pos.y, pos.z));
+        if (blockType == null) {
+            debug(pos, "no block type");
+            return;
+        }
+        String state = blockType.getStateForBlock(blockType);
+        if (!"Active".equals(state)) {
+            BlockType active = blockType.getBlockForState("Active");
+            debug(pos, "block " + blockType.getId() + " state=" + state + ", Active variant=" + (active != null ? active.getId() : "null"));
+            if (active == null) return;
+            // the block passed is the current one: the method resolves the target variant itself from the state name
+            BlockOperations.setBlockInteractionState(chunkStore, sectionRef, pos.x, pos.y, pos.z, blockType, "Active", false);
         }
     }
 
@@ -137,6 +173,11 @@ public final class PortalUtils {
         return null;
     }
 
+    public static double distanceSquared(double x, double y, double z, double x1, double y1, double z1) {
+        double dx = x - x1, dy = y - y1, dz = z - z1;
+        return dx * dx + dy * dy + dz * dz;
+    }
+
     public static double distance3d(double x, double y, double z, double x1, double y1, double z1) {
         return (float) Math.sqrt(Math.pow(x - x1, 2) + Math.pow(y - y1, 2) + Math.pow(z - z1, 2));
     }
@@ -188,18 +229,14 @@ public final class PortalUtils {
         return new Vector3d(basePosition.x + off.x + .5f, basePosition.y, basePosition.z + off.z + .5f);
     }
 
+    /** The account name (what the game itself uses), falling back to "INVALID" for a player not fully in the world. */
     public static String getPlayerName(Player player) {
-        String name = player.getLegacyDisplayName();
-        if (name == null || name.isEmpty()) {
-            name = "INVALID";
-            Ref<EntityStore> ref = player.getReference();
-            if (ref == null) return name;
-            PlayerRef pref = ref.getStore().getComponent(ref, PlayerRef.getComponentType());
-            if (pref == null) return name;
-            name = pref.getUsername();
-            if (name.isEmpty()) return "INVALID";
-        }
-        return name;
+        Ref<EntityStore> ref = player.getReference();
+        if (ref == null) return "INVALID";
+        PlayerRef pref = ref.getStore().getComponent(ref, PlayerRef.getComponentType());
+        if (pref == null) return "INVALID";
+        String name = pref.getUsername();
+        return name == null || name.isEmpty() ? "INVALID" : name;
     }
 
     public static void sendMessage(Player player, Message msg) {

@@ -27,5 +27,7 @@ public class PlayerJoinWorldListener extends HolderSystem<EntityStore> {
 
     @Override
     public void onEntityRemoved(@NonNullDecl Holder<EntityStore> holder, @NonNullDecl RemoveReason removeReason, @NonNullDecl Store<EntityStore> store) {
+        PlayerRef playerRef = holder.getComponent(PlayerRef.getComponentType());
+        if (playerRef != null) PortalService.get().onPlayerLeave(playerRef.getUsername());
     }
 }

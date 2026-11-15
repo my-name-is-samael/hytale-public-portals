@@ -16,18 +16,12 @@ import org.checkerframework.checker.nullness.compatqual.NullableDecl;
 public class PlayersTickSystem extends EntityTickingSystem<EntityStore> {
     private static final HytaleLogger LOGGER = HytaleLogger.forEnclosingClass();
 
-    private float delay = 1f;
-
     @Override
     public void tick(float dt, int i, @NonNullDecl ArchetypeChunk<EntityStore> archetypeChunk,
                      @NonNullDecl Store<EntityStore> store, @NonNullDecl CommandBuffer<EntityStore> commandBuffer) {
-        delay -= dt;
-        if (delay <= 0f) {
-            delay += 1f;
-            Ref<EntityStore> ref = archetypeChunk.getReferenceTo(i);
-            Player player = store.getComponent(ref, Player.getComponentType());
-            if (player != null) PortalService.get().tickPlayer(player);
-        }
+        Ref<EntityStore> ref = archetypeChunk.getReferenceTo(i);
+        Player player = store.getComponent(ref, Player.getComponentType());
+        if (player != null && PortalService.get().shouldScan(player)) PortalService.get().tickPlayer(player);
     }
 
     @NullableDecl

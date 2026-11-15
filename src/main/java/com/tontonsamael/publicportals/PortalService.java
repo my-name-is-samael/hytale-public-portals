@@ -122,10 +122,64 @@ public class PortalService {
 
     private static final HytaleLogger LOGGER = HytaleLogger.forEnclosingClass();
 
-    private final Map<String, PortalData> portals = new HashMap<>();
+    // Worlds tick on their own threads and UI events arrive on others: every shared map is concurrent.
+    private final Map<String, PortalData> portals = new java.util.concurrent.ConcurrentHashMap<>();
 
-    private final Map<String, PortalView> playersEditPortal = new HashMap<>();
-    private final Map<String, Integer> playersWarpSkipDelay = new HashMap<>();
+    private final Map<String, PortalView> playersEditPortal = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Player name to the time (ms) until which entering a portal is ignored, set after each teleport or join. */
+    private final Map<String, Long> playersWarpSkipUntil = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Player name to the time (ms) of the last portal scan, so every player is scanned once a second whatever the player count. */
+    private final Map<String, Long> playersLastScan = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Mount of a rider who is choosing a destination (short-lived, only to bring the mount along). */
+    private final Map<String, Ref<EntityStore>> pendingMounts = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** How long a mount ignores portals after being teleported, so it cannot walk back into the arrival portal. */
+    private static final int MOUNT_PORTAL_LOCK_SECONDS = 3;
+    /** Entity UUID to the time (ms) until which it ignores portals. Keyed by UUID: a mount gets a new entity ref on role change. */
+    private final Map<UUID, Long> entityPortalLockUntil = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private void lockEntity(Ref<EntityStore> ref, int seconds) {
+        if (ref == null || !ref.isValid()) return;
+        com.hypixel.hytale.server.core.entity.UUIDComponent uuid = ref.getStore()
+                .getComponent(ref, com.hypixel.hytale.server.core.entity.UUIDComponent.getComponentType());
+        if (uuid != null) entityPortalLockUntil.put(uuid.getUuid(), System.currentTimeMillis() + seconds * 1000L);
+    }
+
+    private boolean isEntityLocked(Ref<EntityStore> ref) {
+        if (ref == null || !ref.isValid()) return false;
+        com.hypixel.hytale.server.core.entity.UUIDComponent uuid = ref.getStore()
+                .getComponent(ref, com.hypixel.hytale.server.core.entity.UUIDComponent.getComponentType());
+        if (uuid == null) return false;
+        Long until = entityPortalLockUntil.get(uuid.getUuid());
+        if (until == null) return false;
+        if (System.currentTimeMillis() < until) return true;
+        entityPortalLockUntil.remove(uuid.getUuid());
+        return false;
+    }
+
+    // Portals grouped by world, rebuilt only after a change: scanning a player's surroundings does not walk every portal.
+    private volatile Map<String, List<PortalData>> portalsByWorld = Map.of();
+    private volatile boolean portalsByWorldDirty = true;
+
+    private void putPortal(PortalData portal) {
+        portals.put(portal.id, portal);
+        portalsByWorldDirty = true;
+    }
+
+    private void removePortalData(String id) {
+        portals.remove(id);
+        portalsByWorldDirty = true;
+    }
+
+    private List<PortalData> portalsInWorld(String world) {
+        if (portalsByWorldDirty) {
+            portalsByWorldDirty = false; // cleared first: a concurrent change sets it again and is picked up next time
+            Map<String, List<PortalData>> index = new HashMap<>();
+            portals.values().forEach(p -> index.computeIfAbsent(p.world, _ -> new ArrayList<>()).add(p));
+            portalsByWorld = index;
+        }
+        return portalsByWorld.getOrDefault(world, List.of());
+    }
 
     private static final Color chatErrorMsg = new Color(255, 55, 47);
 
@@ -162,17 +216,15 @@ public class PortalService {
 
     @Nullable
     private PortalData getSingleClosePortal(World world, BlockPosition position) {
-        List<PortalData> closePortals = portals.values().stream()
-                .filter(p -> p.world.equals(world.getName()) &&
-                        PortalUtils.distance3d(position.x, position.y, position.z, p.x, p.y, p.z) <= 2f)
+        List<PortalData> closePortals = portalsInWorld(world.getName()).stream()
+                .filter(p -> PortalUtils.distanceSquared(position.x, position.y, position.z, p.x, p.y, p.z) <= 4.0)
                 .toList();
         return closePortals.size() == 1 ? closePortals.getFirst() : null;
     }
 
     @Nullable
     private PortalData getByWorldAndPositionOrClose(World world, BlockPosition position) {
-        return portals.values().stream()
-                .filter(p -> p.world.equals(world.getName()))
+        return portalsInWorld(world.getName()).stream()
                 .filter(p -> p.x == position.x && p.y == position.y && p.z == position.z)
                 .findFirst()
                 .orElseGet(() -> {
@@ -194,6 +246,7 @@ public class PortalService {
     public void onServerBoot() {
         Config<PortalConfig> config = PublicPortals.get().getConfigPortal();
         portals.clear();
+        portalsByWorldDirty = true;
         if (!config.get().isConfigInit()) {
             TeleportPlugin.get().getWarps().forEach((_, w) -> {
                 String newId = PortalUtils.generateNewPortalId(portals.keySet());
@@ -208,22 +261,31 @@ public class PortalService {
                         null, null, false, w.getWorld(),
                         position.x, position.y, position.z,
                         w.getTransform().getRotation().y);
-                portals.put(newId, portal);
+                putPortal(portal);
             });
             config.get().setPortals(portals);
             LOGGER.atInfo().log("Portals first launch configuration written (%d portals) !", portals.size());
         } else {
-            config.get().getPortals().forEach((id, p) -> portals.put(id, p.sanitize()));
+            config.get().getPortals().forEach((id, p) -> putPortal(p.sanitize()));
             LOGGER.atInfo().log("Portals configuration loaded (%d portals)", portals.size());
         }
 
         updateWarps();
     }
 
+    // warps.json is written at most once per burst of changes (creating or editing a portal triggers several updates)
+    private static final java.util.concurrent.ScheduledExecutorService WARP_SAVER =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "PublicPortals-WarpSave");
+                t.setDaemon(true);
+                return t;
+            });
+    private final java.util.concurrent.atomic.AtomicBoolean warpSavePending = new java.util.concurrent.atomic.AtomicBoolean(false);
+
     private void updateWarps() {
         // update needed to sync map/radar markers
         Map<String, Warp> warps = TeleportPlugin.get().getWarps();
-        warps.forEach((id, _) -> TeleportPlugin.get().getWarps().remove(id));
+        warps.clear();
         Set<String> insertedIds = new HashSet<>();
         Map<String, World> worlds = new HashMap<>();
         portals.forEach((_, p) -> {
@@ -241,7 +303,12 @@ public class PortalService {
                     id, worlds.get(p.world), p.ownerName != null ? p.ownerName : "*Teleporter", Instant.now()));
             insertedIds.add(id);
         });
-        TeleportPlugin.get().saveWarps();
+        if (warpSavePending.compareAndSet(false, true)) {
+            WARP_SAVER.schedule(() -> {
+                warpSavePending.set(false);
+                TeleportPlugin.get().saveWarps();
+            }, 1, java.util.concurrent.TimeUnit.SECONDS);
+        }
     }
 
     public int getPlayerPortalsCount(@Nonnull String uuid) {
@@ -249,14 +316,25 @@ public class PortalService {
                 .reduce(0, Integer::sum);
     }
 
-    public void tickPlayer(Player player) {
+    /** True once per second and per player: the tick system calls this for every player on every tick. */
+    public boolean shouldScan(Player player) {
         String playerName = PortalUtils.getPlayerName(player);
-        if (playersWarpSkipDelay.containsKey(playerName)) {
-            int val = playersWarpSkipDelay.get(playerName) - 1;
-            if (val <= 0) playersWarpSkipDelay.remove(playerName);
-            else playersWarpSkipDelay.put(playerName, val);
-        }
+        long now = System.currentTimeMillis();
+        Long last = playersLastScan.get(playerName);
+        if (last != null && now - last < 1000) return false;
+        playersLastScan.put(playerName, now);
+        return true;
+    }
 
+    private boolean isWarpSkipped(String playerName) {
+        Long until = playersWarpSkipUntil.get(playerName);
+        if (until == null) return false;
+        if (System.currentTimeMillis() < until) return true;
+        playersWarpSkipUntil.remove(playerName);
+        return false;
+    }
+
+    public void tickPlayer(Player player) {
         // enable close portals
         if (player.getReference() == null || player.getWorld() == null) return;
         PlayerRef pref = player.getReference().getStore()
@@ -264,12 +342,11 @@ public class PortalService {
         if (pref == null) return;
         Vector3d playerPos = pref.getTransform().getPosition();
         Set<PortalData> checkExistenceQueue = new HashSet<>();
-        portals.values().stream()
-                .filter(p -> p.world.equals(player.getWorld().getName()))
+        portalsInWorld(player.getWorld().getName())
                 .forEach(p -> {
                     BlockPosition pos = new BlockPosition(p.x, p.y, p.z);
-                    if (PortalUtils.distance3d(playerPos.x, playerPos.y, playerPos.z,
-                            pos.x, pos.y, pos.z) > 20f) return;
+                    if (PortalUtils.distanceSquared(playerPos.x, playerPos.y, playerPos.z,
+                            pos.x, pos.y, pos.z) > 400.0) return;
                     PortalUtils.activatePortal(player.getWorld(), pos);
                     if (p.teleporter == null)
                         p.teleporter = PortalUtils.retrieveTeleporter(player.getWorld(), pos);
@@ -288,8 +365,14 @@ public class PortalService {
                             p.teleporter = PortalUtils.retrieveTeleporter(player.getWorld(),
                                     new BlockPosition(p.x, p.y, p.z));
                             if (p.teleporter == null) {
-                                LOGGER.atInfo().log("Failed to retrieve close portal '%s', removing...", p.id);
-                                onBreak(p.id);
+                                BlockPosition pos = new BlockPosition(p.x, p.y, p.z);
+                                if (PortalUtils.isTeleporterBlockGone(player.getWorld(), pos)) {
+                                    LOGGER.atInfo().log("Portal '%s' no longer has a teleporter block, removing...", p.id);
+                                    onBreak(p.id);
+                                } else {
+                                    // chunk/block entity not ready yet (boot): retried at the next scan
+                                    PortalUtils.debug(pos, "teleporter not ready, keeping portal '" + p.id + "'");
+                                }
                             }
                         }
                     })
@@ -299,7 +382,13 @@ public class PortalService {
 
     public void setWarpSkip(Player player, int duration) {
         String playerName = PortalUtils.getPlayerName(player);
-        playersWarpSkipDelay.put(playerName, duration);
+        playersWarpSkipUntil.put(playerName, System.currentTimeMillis() + duration * 1000L);
+    }
+
+    /** Forgets the per-player runtime state of a player who left (or changed world). */
+    public void onPlayerLeave(String playerName) {
+        playersLastScan.remove(playerName);
+        pendingMounts.remove(playerName);
     }
 
     public void onPlayerJoinWorld(Player player) {
@@ -373,7 +462,7 @@ public class PortalService {
         PortalData portal = new PortalData(newPortalId, "", isPublic ? null : uuid,
                 isPublic ? null : playerName, false, world.getName(),
                 position.x, position.y, position.z, warp.getTransform().getRotation().y);
-        portals.put(portal.id, portal);
+        putPortal(portal);
 
         config.get().setPortal(portal);
 
@@ -396,7 +485,7 @@ public class PortalService {
             portal = new PortalData(PortalUtils.generateNewPortalId(portals.keySet()), "",
                     null, null, false, world.getName(),
                     position.x, position.y, position.z, null);
-            portals.put(portal.id, portal);
+            putPortal(portal);
             PublicPortals.get().getConfigPortal().get().setPortal(portal);
             updateWarps();
         }
@@ -429,7 +518,7 @@ public class PortalService {
 
     public void onPlayerEnter(Player player, World world, BlockPosition position) {
         String playerName = PortalUtils.getPlayerName(player);
-        if (playersWarpSkipDelay.containsKey(playerName)) return;
+        if (isWarpSkipped(playerName)) return;
         if (player.getReference() == null) return;
         PlayerRef playerRef = player.getReference().getStore()
                 .getComponent(player.getReference(), PlayerRef.getComponentType());
@@ -444,10 +533,108 @@ public class PortalService {
     }
 
     public void onMobEnter(Ref<EntityStore> entity, World world, BlockPosition position) {
+        if (isEntityLocked(entity)) return;
         PortalData portal = getByWorldAndPositionOrClose(world, position);
         if (portal == null) return;
         if (portal.destination != null && portals.containsKey(portal.destination))
             world.execute(() -> teleportEntity(entity, portal.destination, portal.id));
+    }
+
+    /**
+     * The game controls a ridden NPC from the rider's client, which overrides any forced move of the rider or the mount.
+     * Dismounting first (the game's own routine) lets both be teleported.
+     */
+    private void dismount(Ref<EntityStore> riderRef, Player rider) {
+        if (riderRef == null || !riderRef.isValid()) return;
+        com.hypixel.hytale.builtin.mounts.MountPlugin.checkDismountNpc(riderRef.getStore(), riderRef, rider);
+    }
+
+    /**
+     * Puts the rider back on his mount the way the game does when a player uses the NPC: the "use" interaction queues the
+     * player in the NPC's StateSupport and the mount role runs its Mount action. The NPC needs a moment to get its
+     * original role back after the dismount, so the request is sent a bit later (and once more if it did not take).
+     */
+    private void remount(Ref<EntityStore> mount, Ref<EntityStore> riderRef, String portalId) {
+        PortalData portal = portals.get(portalId);
+        World world = portal != null ? Universe.get().getWorld(portal.world) : null;
+        if (world == null) return;
+        // the role change gives the NPC a new entity reference: keep its UUID to find it again
+        com.hypixel.hytale.server.core.entity.UUIDComponent uuidCmp = mount.isValid() ? mount.getStore()
+                .getComponent(mount, com.hypixel.hytale.server.core.entity.UUIDComponent.getComponentType()) : null;
+        UUID mountUuid = uuidCmp != null ? uuidCmp.getUuid() : null;
+        if (mountUuid == null) return;
+        remountStep(world, mountUuid, riderRef, 0);
+    }
+
+    /**
+     * Once back in its own role the mount behaves like any livestock: it may start a nap, sleep or get startled, and
+     * lying down makes it impossible to ride. Keep it in its Idle state while we wait for the rider to get back on.
+     */
+    private void keepIdle(Ref<EntityStore> mount, com.hypixel.hytale.server.npc.role.support.StateSupport support) {
+        try {
+            if (!support.inState("Idle", "Default")) {
+                LOGGER.atInfo().log("Mount was in state '%s' after the teleport, putting it back to Idle", support.getStateName());
+                support.setState(mount, "Idle", "Default", mount.getStore());
+            }
+        } catch (RuntimeException e) {
+            LOGGER.atWarning().log("Could not reset the mount state: %s", e.getMessage());
+        }
+    }
+
+    /** Polls every 250 ms (the NPC is ready as soon as its role is back) and queues the rider as early as possible. */
+    private void remountStep(World world, UUID mountUuid, Ref<EntityStore> riderRef, int attempt) {
+        if (attempt >= 12) return;
+        java.util.concurrent.CompletableFuture.delayedExecutor(attempt == 0 ? 250 : 250, java.util.concurrent.TimeUnit.MILLISECONDS, world)
+                .execute(() -> {
+                    if (!riderRef.isValid()) return;
+                    Player rider = riderRef.getStore().getComponent(riderRef, Player.getComponentType());
+                    if (rider == null || rider.getMountEntityId() != 0) return; // mounted again
+                    Ref<EntityStore> current = world.getEntityStore().getRefFromUUID(mountUuid);
+                    if (current == null || !current.isValid()) {
+                        remountStep(world, mountUuid, riderRef, attempt + 1);
+                        return;
+                    }
+                    com.hypixel.hytale.server.npc.role.support.StateSupport support =
+                            com.hypixel.hytale.server.npc.role.support.StateSupport.get(current, current.getStore());
+                    if (support != null) keepIdle(current, support);
+                    // queue the rider once the NPC accepts him; if it never says so, force it after ~2 s
+                    if (support != null && (support.willInteractWith(riderRef) || attempt >= 8)) {
+                        support.addInteraction(riderRef);
+                    }
+                    remountStep(world, mountUuid, riderRef, attempt + 1);
+                });
+    }
+
+    /** A mount carrying a player reached a portal: the rider decides (or the portal's destination applies). */
+    public void onMountEnter(Ref<EntityStore> mount, Player rider, World world, BlockPosition position) {
+        String riderName = PortalUtils.getPlayerName(rider);
+        if (isWarpSkipped(riderName) || isEntityLocked(mount)) {
+            return;
+        }
+        PortalData portal = getByWorldAndPositionOrClose(world, position);
+        if (portal == null) {
+            return;
+        }
+        if (rider.getReference() == null) return;
+        PlayerRef playerRef = rider.getReference().getStore().getComponent(rider.getReference(), PlayerRef.getComponentType());
+        if (playerRef == null) return;
+        if (portal.destination == null || !portals.containsKey(portal.destination)) {
+            setWarpSkip(rider, 2);
+            pendingMounts.put(riderName, mount);
+            rider.getPageManager().openCustomPage(rider.getReference(), rider.getReference().getStore(),
+                    new PortalSelectDestination(playerRef, portal.id));
+        } else {
+            // the rider and his mount ignore portals for a while: the mount may wander back into the arrival portal
+            setWarpSkip(rider, MOUNT_PORTAL_LOCK_SECONDS);
+            lockEntity(mount, MOUNT_PORTAL_LOCK_SECONDS);
+            Ref<EntityStore> riderRef = rider.getReference();
+            world.execute(() -> {
+                dismount(riderRef, rider);
+                teleportEntity(mount, portal.destination, portal.id);
+                if (riderRef != null && riderRef.isValid()) teleportEntity(riderRef, portal.destination, portal.id);
+                if (riderRef != null) remount(mount, riderRef, portal.destination);
+            });
+        }
     }
 
     public boolean onPlayerBreak(Player player, World world, BlockPosition position) {
@@ -488,7 +675,7 @@ public class PortalService {
                 p.queueDestinationChange = true;
             }
         });
-        portals.remove(portalId);
+        removePortalData(portalId);
         PublicPortals.get().getConfigPortal().get().removePortal(portalId);
         updateWarps();
     }
@@ -610,6 +797,15 @@ public class PortalService {
         assert ref != null && player != null;
         setWarpSkip(player, 2);
 
+        // a rider who came through a portal brings his mount along (teleporting the rider makes him dismount)
+        Ref<EntityStore> mount = pendingMounts.remove(PortalUtils.getPlayerName(player));
+        if (mount != null && mount.isValid()) {
+            setWarpSkip(player, MOUNT_PORTAL_LOCK_SECONDS);
+            lockEntity(mount, MOUNT_PORTAL_LOCK_SECONDS);
+            dismount(ref, player);
+            teleportEntity(mount, portalId, originPortalId);
+            remount(mount, ref, portalId);
+        }
         teleportEntity(ref, portalId, originPortalId);
 
         PortalData portal = portals.get(portalId);

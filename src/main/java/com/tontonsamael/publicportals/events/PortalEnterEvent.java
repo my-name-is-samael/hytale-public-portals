@@ -1,6 +1,10 @@
 package com.tontonsamael.publicportals.events;
 
 import com.hypixel.hytale.builtin.adventure.teleporter.component.Teleporter;
+import com.hypixel.hytale.builtin.mounts.MountedByComponent;
+import com.hypixel.hytale.builtin.mounts.NPCMountComponent;
+import com.hypixel.hytale.component.Ref;
+import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.codec.Codec;
 import com.hypixel.hytale.codec.KeyedCodec;
 import com.hypixel.hytale.codec.builder.BuilderCodec;
@@ -49,28 +53,45 @@ public class PortalEnterEvent extends SimpleBlockInteraction {
         Teleporter teleporter = PortalUtils.retrieveTeleporter(world, position);
         if (teleporter == null) return;
 
-        // player check
-        Player player = ctxt.getEntity().getStore().getComponent(ctxt.getEntity(), Player.getComponentType());
-        if(player == null) {
-            /*
-            // MountedComponent nor MountedByComponent are detected well for now (for rideable animals like horses, rams, etc.)
-            MountedComponent mount = ctxt.getEntity().getStore().getComponent(ctxt.getEntity(), MountedComponent.getComponentType());
-            LOGGER.atInfo().log("mount = %b", mount != null);
-            if (mount != null) {
-                Ref<EntityStore> refPlayerPassenger = mount.getMountedToEntity();//getPassengers().stream().filter(p -> p.getStore().getComponent(p, Player.getComponentType()) != null).findFirst().orElse(null)
-                if (refPlayerPassenger == null) return;
-                player = refPlayerPassenger.getStore().getComponent(refPlayerPassenger, Player.getComponentType());
-            }
-            */
-            NPCEntity mob = ctxt.getEntity().getStore().getComponent(ctxt.getEntity(), NPCEntity.getComponentType());
-            if(mob != null) {
-                PortalService.get().onMobEnter(ctxt.getEntity(), world, position);
-            }
+        Ref<EntityStore> entity = ctxt.getEntity();
+        Store<EntityStore> store = entity.getStore();
+        Player player = store.getComponent(entity, Player.getComponentType());
+        if (player != null) {
+            PortalService.get().onPlayerEnter(player, world, position);
             return;
         }
 
-        PortalService.get().onPlayerEnter(player, world, position);
+        // Riders. What the game exposes for a rideable NPC (found by testing, 0.7.7):
+        // - the entity colliding with the portal is the mount (an NPC), never the rider;
+        // - the mount has no MountedByComponent and the rider no MountedComponent (those are for minecarts and seats);
+        // - the link is NPCMountComponent.getOwnerPlayerRef() on the mount (and Player.getMountEntityId() on the rider);
+        // - teleporting a ridden NPC or its rider does nothing: the rider's client drives the mount and overrides it.
+        //   So PortalService dismounts the rider with MountPlugin.checkDismountNpc, teleports both, then queues the rider
+        //   on the NPC again through StateSupport.addInteraction (what a "use" on the NPC does).
+        // MountedByComponent is still checked for other mount kinds.
+        Player rider = null;
+        MountedByComponent mountedBy = store.getComponent(entity, MountedByComponent.getComponentType());
+        if (mountedBy != null) {
+            for (Ref<EntityStore> passenger : mountedBy.getPassengers()) {
+                rider = passenger.isValid() ? store.getComponent(passenger, Player.getComponentType()) : null;
+                if (rider != null) break;
+            }
+        }
+        NPCMountComponent npcMount = store.getComponent(entity, NPCMountComponent.getComponentType());
+        if (rider == null && npcMount != null && npcMount.getOwnerPlayerRef() != null) {
+            Ref<EntityStore> ownerRef = npcMount.getOwnerPlayerRef().getReference();
+            if (ownerRef != null && ownerRef.isValid()) {
+                rider = store.getComponent(ownerRef, Player.getComponentType());
+            }
+        }
+        if (rider != null) {
+            PortalService.get().onMountEnter(entity, rider, world, position);
+            return;
+        }
 
+        if (store.getComponent(entity, NPCEntity.getComponentType()) != null) {
+            PortalService.get().onMobEnter(entity, world, position);
+        }
     }
 
     @Override
